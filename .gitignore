@@ -1,0 +1,9 @@
+# APM dependencies
+apm_modules/
+
+# APM generated deployment dirs (regenerate with: apm install)
+/.agents/
+/.claude/
+/.cursor/
+/.opencode/
+/.github/agents/

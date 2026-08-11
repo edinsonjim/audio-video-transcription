@@ -1,0 +1,23 @@
+name: transcriptor-srt
+version: 1.0.0
+description: 'Transcribes audio files to SRT subtitles using OpenAI Whisper. Use
+  whenever you need to transcribe audio/video to subtitles or captions.'
+author: edinsonjim
+# Which agent platforms to deploy to.
+# Resolution order: --target flag > this field > auto-detect from filesystem.
+# Accepted values: agent-skills, antigravity, claude, codex, copilot, cursor, gemini, kiro, opencode, windsurf
+targets:
+- claude
+- codex
+- copilot
+- cursor
+- gemini
+- opencode
+- windsurf
+dependencies:
+  apm: []
+  mcp: []
+includes: auto
+devDependencies:
+  apm: []
+scripts: {}
