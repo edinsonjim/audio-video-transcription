@@ -1,7 +1,10 @@
 # transcriptor-srt
 
 APM package (library) with a reusable skill for transcribing audio files to SRT
-subtitles using OpenAI Whisper.
+subtitles using faster-whisper. Designed for very large files (4–7 GB+): it
+transcribes in memory-bounded chunks, supports resume after interruption, and
+reports live progress to the agent via a JSON status file and `[PROGRESS]`
+stdout markers.
 
 ## Contents
 
@@ -32,23 +35,36 @@ Then ask your agent to transcribe an audio file, e.g.:
 
     Transcribe episode-03.mp3 to SRT subtitles
 
-The skill runs the bundled script via `uv run --with openai-whisper`, so no
-permanent project dependency is required. On first use, whisper downloads the
-selected model (default `medium`, ~1.5 GB).
+The skill runs the bundled script via `uv run --with faster-whisper --with numpy`,
+so no permanent project dependency is required. On first use, faster-whisper
+downloads the selected model (default `medium`, ~1.5 GB). `ffmpeg`/`ffprobe`
+must be installed on `PATH`.
 
 ## Script
 
 ```
 python transcribe_srt.py AUDIO [--language es] [--model medium] [--output-dir .]
+                      [--chunk-secs 300] [--chunk-overlap 15] [--vad]
+                      [--beam-size 5] [--word-timestamps]
+                      [--status-json <file>] [--resume] [--force] [--quiet]
 ```
 
 - `AUDIO` — path to the audio/video file to transcribe (required)
-- `--language` — spoken language code (default: `es`)
-- `--model` — whisper model size: tiny/base/small/medium/large (default: `medium`)
+- `--language` — spoken language code (default: `es`); `auto` detects on the
+  first chunk
+- `--model` — whisper model size: tiny/base/small/medium/large/turbo (default:
+  `medium`)
 - `--output-dir` — directory for the generated `.srt` (default: current dir)
+- `--chunk-secs` / `--chunk-overlap` — per-chunk window and overlap (default:
+  `300`/`15`); keeps RAM bounded on multi-GB inputs
+- `--vad` — silence filtering (default on)
+- `--status-json` — live JSON status file the agent polls (default:
+  `<output>.status.json`)
+- `--resume` — reuse completed chunk checkpoints; `--force` ignores them
 
 Output: an `.srt` file with the same basename as the input, written next to the
-audio or into `--output-dir`.
+audio or into `--output-dir`. Progress markers on stdout: `[PROGRESS]`,
+`[DONE] output=<...>`, `[ERROR] msg=<...>`.
 
 ## Development
 

@@ -1,6 +1,6 @@
 name: transcriptor-srt
-version: 1.0.0
-description: 'Transcribes audio files to SRT subtitles using OpenAI Whisper. Use
+version: 1.1.0
+description: 'Transcribes audio files to SRT subtitles using faster-whisper. Use
   whenever you need to transcribe audio/video to subtitles or captions.'
 author: edinsonjim
 # Which agent platforms to deploy to.
