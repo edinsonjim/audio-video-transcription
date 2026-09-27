@@ -1,7 +1,6 @@
 name: transcriptor-srt
 version: 1.1.0
-description: 'Transcribes audio/video with faster-whisper to SRT, JSONL, or plain
-  text. Use for subtitles, captions, or transcripts.'
+description: Transcribe audio/video to SRT, JSONL, or plain text with faster-whisper.
 author: edinsonjim
 # Which agent platforms to deploy to.
 # Resolution order: --target flag > this field > auto-detect from filesystem.
