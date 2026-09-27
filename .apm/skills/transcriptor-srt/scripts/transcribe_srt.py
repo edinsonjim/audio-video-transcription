@@ -21,7 +21,7 @@ MIN_AUDIO_SECS = 0.1
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Transcribe an audio/video file to an SRT subtitle file using "
+            "Transcribe an audio/video file to SRT, JSONL, or plain text using "
             "faster-whisper. Very large files (multi-GB) are processed in "
             "memory-bounded chunks with progress reporting and resume support."
         )
@@ -40,7 +40,13 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         default=".",
-        help="Directory where the generated .srt file will be written. Default: current directory",
+        help="Directory where generated transcript files will be written. Default: current directory",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("srt", "jsonl", "txt", "all"),
+        default="srt",
+        help="Output format: srt (default), jsonl, txt, or all",
     )
     parser.add_argument(
         "--chunk-secs",
@@ -123,6 +129,7 @@ class StatusReporter:
         self.eta_secs = None
         self.language = None
         self.output = None
+        self.outputs = None
         self.chunks_completed = 0
         self._last_marker = 0.0
 
@@ -146,6 +153,7 @@ class StatusReporter:
     def _write_json(self, now):
         if self.path is None:
             return
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         payload = dict(self.base)
         payload.update(
             {
@@ -162,6 +170,8 @@ class StatusReporter:
         )
         if self.output:
             payload["output"] = self.output
+        if self.outputs:
+            payload["outputs"] = self.outputs
         tmp_path = self.path + f".{os.getpid()}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
@@ -171,11 +181,12 @@ class StatusReporter:
         if not self.quiet:
             print(f"[INFO] {msg}", flush=True)
 
-    def done(self, output):
+    def done(self, output, outputs):
         self.state = "done"
         self.stage = "done"
         self.percent = 100.0
         self.output = output
+        self.outputs = outputs
         self.update(force=True)
         print(f"[DONE] output={output}", flush=True)
 
@@ -249,27 +260,6 @@ def fmt_srt_ts(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
-def write_srt(segments, out_path):
-    lines = []
-    for i, seg in enumerate(segments, start=1):
-        lines.append(str(i))
-        lines.append(f"{fmt_srt_ts(seg['start'])} --> {fmt_srt_ts(seg['end'])}")
-        lines.append(seg["text"])
-        lines.append("")
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        prefix=os.path.basename(out_path) + ".", suffix=".tmp",
-        dir=os.path.dirname(out_path) or ".",
-    )
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(lines))
-        os.replace(tmp_path, out_path)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-
-
 def chunk_dir_for(output_path):
     return output_path + ".chunks"
 
@@ -304,6 +294,105 @@ def clean_text(text):
     return " ".join(text.split())
 
 
+def output_formats(format_name):
+    if format_name == "all":
+        return ("srt", "jsonl", "txt")
+    return (format_name,)
+
+
+def transcript_output_paths(audio_path, output_dir, formats):
+    basename = os.path.splitext(os.path.basename(audio_path))[0]
+    return {
+        output_format: os.path.join(output_dir, f"{basename}.{output_format}")
+        for output_format in formats
+    }
+
+
+def iter_merged_segments(chunk_dir, total_chunks, chunk_secs, duration):
+    """Yield overlap-deduplicated segments with absolute media timestamps."""
+    covered = 0.0
+    for idx in range(total_chunks):
+        checkpoint = load_checkpoint(chunk_dir, idx)
+        if checkpoint is None:
+            raise RuntimeError(f"missing or invalid checkpoint for chunk {idx + 1}/{total_chunks}")
+        for seg in checkpoint["segments"]:
+            start = idx * chunk_secs + seg["start"]
+            end = idx * chunk_secs + seg["end"]
+            if end <= covered:
+                continue
+            merged = {
+                "start": max(start, covered),
+                "end": min(end, duration),
+                "text": seg["text"],
+            }
+            if merged["end"] <= merged["start"]:
+                continue
+            yield idx + 1, merged
+            covered = merged["end"]
+
+
+def write_transcripts_streaming(chunk_dir, total_chunks, chunk_secs, duration, output_paths):
+    """Write all requested formats from checkpoints without retaining all segments."""
+    temp_paths = {}
+    handles = {}
+    published_paths = set()
+    try:
+        for output_format, output_path in output_paths.items():
+            fd, temp_path = tempfile.mkstemp(
+                prefix=os.path.basename(output_path) + ".",
+                suffix=".tmp",
+                dir=os.path.dirname(output_path) or ".",
+            )
+            temp_paths[output_format] = temp_path
+            handles[output_format] = os.fdopen(fd, "w", encoding="utf-8")
+
+        segment_id = 0
+        for chunk_index, seg in iter_merged_segments(
+            chunk_dir, total_chunks, chunk_secs, duration
+        ):
+            segment_id += 1
+            for output_format, fh in handles.items():
+                if output_format == "srt":
+                    fh.write(
+                        f"{segment_id}\n"
+                        f"{fmt_srt_ts(seg['start'])} --> {fmt_srt_ts(seg['end'])}\n"
+                        f"{seg['text']}\n\n"
+                    )
+                elif output_format == "jsonl":
+                    json.dump(
+                        {
+                            "id": segment_id,
+                            "chunk": chunk_index,
+                            "start": round(seg["start"], 3),
+                            "end": round(seg["end"], 3),
+                            "text": seg["text"],
+                        },
+                        fh,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    fh.write("\n")
+                else:  # txt
+                    fh.write(seg["text"] + "\n")
+
+        for fh in handles.values():
+            fh.close()
+        handles.clear()
+
+        # Replace only after every format has been written successfully.
+        for output_format, output_path in output_paths.items():
+            os.replace(temp_paths[output_format], output_path)
+            published_paths.add(output_format)
+        return segment_id
+    finally:
+        for fh in handles.values():
+            if not fh.closed:
+                fh.close()
+        for output_format, temp_path in temp_paths.items():
+            if output_format not in published_paths and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
 def transcribe_chunk(model, pcm, language, args):
     segments_iter, info = model.transcribe(
         audio=pcm,
@@ -325,6 +414,7 @@ def transcribe_chunk(model, pcm, language, args):
 def run(args, reporter):
     if not os.path.exists(args.audio):
         raise FileNotFoundError(args.audio)
+    os.makedirs(args.output_dir, exist_ok=True)
 
     reporter.info("Probing media duration ...")
     reporter.stage = "probing"
@@ -354,15 +444,18 @@ def run(args, reporter):
     reporter.language = language
     reporter.chunk_total = total_chunks
 
+    formats = output_formats(args.format)
+    output_paths = transcript_output_paths(args.audio, args.output_dir, formats)
+    primary_output = output_paths[formats[0]]
     out_base = os.path.splitext(os.path.basename(args.audio))[0]
-    output_path = os.path.join(args.output_dir, out_base + ".srt")
-    chunk_dir = chunk_dir_for(output_path)
+    # Keep the legacy checkpoint location so existing --resume data remains usable,
+    # regardless of which transcript export format is selected.
+    checkpoint_anchor = os.path.join(args.output_dir, out_base + ".srt")
+    chunk_dir = chunk_dir_for(checkpoint_anchor)
     if args.status_json is None:
-        reporter.path = output_path + ".status.json"
+        reporter.path = primary_output + ".status.json"
 
-    merged = []
-    covered = 0.0
-    chunk_times = []
+    chunk_elapsed_total = 0.0
     reporter.stage = "chunk"
     reporter.info(f"Starting {total_chunks} chunk(s) of {chunk_secs:.0f}s ...")
 
@@ -371,6 +464,7 @@ def run(args, reporter):
         start = idx * chunk_secs
         window_dur = min(chunk_secs + overlap, duration - start)
 
+        pcm = None
         checkpoint = None if args.force else load_checkpoint(chunk_dir, idx)
         start_ts = time.time()
         if checkpoint is None:
@@ -386,27 +480,20 @@ def run(args, reporter):
             checkpoint = segments
             save_checkpoint(chunk_dir, idx, language, segments)
             reporter.info(f"Chunk {idx + 1}/{total_chunks} transcribed ({len(segments)} segments)")
+            pcm = None
         else:
             segments = checkpoint["segments"]
             if language is None and checkpoint.get("language"):
                 language = checkpoint["language"]
                 reporter.language = language
             reporter.info(f"Chunk {idx + 1}/{total_chunks} restored from checkpoint")
-        chunk_times.append(time.time() - start_ts)
-
-        for seg in segments:
-            g_start = start + seg["start"]
-            g_end = start + seg["end"]
-            if g_end <= covered:
-                continue
-            merged.append({"start": max(g_start, covered), "end": g_end, "text": seg["text"]})
-            if g_end > covered:
-                covered = g_end
+        chunk_elapsed_total += time.time() - start_ts
+        del checkpoint, segments
 
         reporter.chunks_completed = idx + 1
         reporter.percent = min(start + chunk_secs, duration) / duration * 100.0
-        if len(chunk_times) >= 2:
-            avg = sum(chunk_times) / len(chunk_times)
+        if reporter.chunks_completed >= 2:
+            avg = chunk_elapsed_total / reporter.chunks_completed
             reporter.eta_secs = avg * (total_chunks - reporter.chunks_completed)
         reporter.update(force=True)
 
@@ -417,10 +504,11 @@ def run(args, reporter):
     os.makedirs(args.output_dir, exist_ok=True)
     reporter.stage = "writing"
     reporter.update(force=True)
-    write_srt(merged, output_path)
+    write_transcripts_streaming(chunk_dir, total_chunks, chunk_secs, duration, output_paths)
 
     reporter.language = language
-    reporter.done(os.path.abspath(output_path))
+    absolute_outputs = [os.path.abspath(path) for path in output_paths.values()]
+    reporter.done(os.path.abspath(primary_output), absolute_outputs)
     return 0
 
 

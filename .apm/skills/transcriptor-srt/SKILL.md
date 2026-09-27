@@ -1,26 +1,27 @@
 ---
 name: transcriptor-srt
 description: >-
-  Transcribes audio or video files into SRT subtitle files using faster-whisper.
-  Use whenever the user asks to transcribe, generate subtitles or captions, convert
-  audio to SRT, or create a transcript with timestamps. Designed for very large
-  files (multi-GB): processes in memory-bounded chunks, supports resume after
-  interruption, and reports live progress via a JSON status file and [PROGRESS]
-  stdout markers. Trigger keywords: transcribe, transcript, transcription, srt,
-  subtitles, captions, audio to srt, subtitular, transcripción, subtítulos, whisper.
+  Transcribes audio or video files into SRT, JSONL, or plain-text transcripts
+  using faster-whisper. Use whenever the user asks to transcribe, generate
+  subtitles or captions, or create a transcript. Designed for very large files
+  (multi-GB): processes audio in chunks, supports resume after interruption, and
+  reports live progress via a JSON status file and [PROGRESS] stdout markers.
+  Trigger keywords: transcribe, transcript, transcription, srt, jsonl, subtitles,
+  captions, audio to text, subtitular, transcripción, subtítulos, whisper.
 ---
 
-# Transcribe audio to SRT
+# Transcribe audio or video
 
-Convert an audio or video file into an SRT subtitle file using the bundled
-faster-whisper script.
+Convert an audio or video file into SRT subtitles, JSONL segments, or plain text
+using the bundled faster-whisper script. SRT remains the default output.
 
 ## When to use
 
 Use this skill whenever the user wants subtitles, captions, or a timestamped
 transcript from an audio/video file (e.g. `.mp3`, `.wav`, `.m4a`, `.mp4`,
 `.mkv`). It handles very large files (4 GB, 7 GB+) by transcribing the audio in
-fixed-size chunks, so memory stays bounded regardless of the file size.
+  fixed-size chunks, and writes the final transcript a chunk at a time so
+  assembly memory does not grow with the recording duration.
 
 ## Prerequisites
 
@@ -45,8 +46,9 @@ fixed-size chunks, so memory stays bounded regardless of the file size.
 
    ```bash
    uv run --with faster-whisper --with numpy python <path>/scripts/transcribe_srt.py <audio> \
-     [--language es] [--model medium] [--output-dir <dir>] \
-     --status-json <status.json>
+      [--language es] [--model medium] [--format srt|jsonl|txt|all] \
+      [--output-dir <dir>] \
+      --status-json <status.json>
    ```
 
    - `<audio>` — path to the audio/video file (required)
@@ -55,8 +57,10 @@ fixed-size chunks, so memory stays bounded regardless of the file size.
    - `--model` — whisper model size: `tiny`, `base`, `small`, `medium`, `large`
      (maps to `large-v3`), `turbo`. Default `medium` (~1.5 GB int8). Prefer a
      smaller model for short/fast jobs, `large`/`turbo` for accuracy.
-   - `--output-dir` — directory for the generated `.srt`. Default is the current
-     working directory.
+   - `--format` — `srt` (default), `jsonl`, `txt`, or `all`. `all` writes all
+     three formats in one pass.
+   - `--output-dir` — directory for the generated transcript file(s). Default
+     is the current working directory.
    - `--status-json` — path for the live JSON status file. Default is
      `<output>.status.json`. Always pass an explicit path when the agent needs to
      poll progress.
@@ -68,7 +72,18 @@ fixed-size chunks, so memory stays bounded regardless of the file size.
      `--force` re-transcribes everything.
    - `--quiet` — print only the machine markers `[PROGRESS]`/`[DONE]`/`[ERROR]`.
 
-   **Important for large files:** the process works on GPU-less CPU with int8
+    **Important for large files:** audio is decoded and transcribed in bounded
+    chunks. Output assembly also streams from one checkpoint at a time, rather
+    than retaining the full transcript in memory. Each checkpoint is a JSON file
+    for an individual chunk.
+
+    The JSONL export is useful for searching or extracting information from long
+    transcripts: each line contains a segment's absolute `start`/`end` time in
+    seconds, its text, a 1-based chunk number, and a transcript-order `id`.
+    Retrieve or process relevant lines in batches rather than sending a multi-hour
+    transcript to a model all at once. TXT is compact but omits timestamps.
+
+   **Performance note:** the process works on GPU-less CPU with int8
    quantization by default (`--device cpu --compute-type int8`) — it is 3–4x
    faster and uses far less RAM than openai-whisper, but long videos still take
    significant wall-clock time. Run it and monitor, don't block.
@@ -103,7 +118,8 @@ While a run is active the agent should not just wait — it should track progres
     "language": "es",
     "elapsed_secs": 812.0,
     "eta_secs": 1100.0,
-    "output": "/abs/path/episode-03.srt"
+    "output": "/abs/path/episode-03.srt",
+    "outputs": ["/abs/path/episode-03.srt"]
   }
   ```
   - `stage` values: `probing`, `model_load`, `chunk`, `merging`, `writing`,
@@ -121,8 +137,8 @@ While a run is active the agent should not just wait — it should track progres
   after the window clearly exceeds normal chunk times consider interrupting.
 
 - **Interruptions.** A killed process exits with code `130` and writes
-  `state: interrupted`; previously completed chunks are safe on disk under
-  `<output>.srt.chunks/`. Re-run the same command with `--resume` to continue
+   `state: interrupted`; previously completed chunks are safe on disk under
+   `<basename>.srt.chunks/`. Re-run the same command with `--resume` to continue
   without re-transcribing finished chunks.
 
 - **Resume file semantics.** Checkpoint files (`chunk_%05d.json`) are tiny; they
@@ -130,10 +146,17 @@ While a run is active the agent should not just wait — it should track progres
 
 ## Output
 
-- **Filename:** same basename as the input audio, with a `.srt` extension
-  (e.g. `episode-03.mp3` → `episode-03.srt`).
+- **Filename:** same basename as the input audio, with the selected extension
+  (e.g. `episode-03.mp3` → `episode-03.srt`, `.jsonl`, or `.txt`). With
+  `--format all`, all three files are generated.
 - **Location:** the directory passed via `--output-dir` (default: current dir).
-- **Format:** standard SRT — numbered cues, `HH:MM:SS,mmm --> HH:MM:SS,mmm`
-  timecodes, and the transcribed text for each segment. Chunk overlaps are
-  deduplicated so cues never overlap.
-- **Checkpoints:** `<output>.srt.chunks/` holds one JSON per chunk for resume.
+- **SRT:** standard numbered cues with `HH:MM:SS,mmm --> HH:MM:SS,mmm`
+  timecodes.
+- **JSONL:** one compact JSON object per segment, with `id`, 1-based `chunk`,
+  absolute `start`/`end` times in seconds, and `text`.
+- **TXT:** one transcribed segment per line, without timestamps.
+- **Overlap handling:** duplicate segments from chunk overlaps are removed for
+  all output formats.
+- **Checkpoints:** `<basename>.srt.chunks/` holds one JSON file per audio chunk
+  for resume. This legacy location is retained for every format, so existing
+  checkpoints can be reused with `--format jsonl` or `txt`.
