@@ -1,5 +1,5 @@
 ---
-name: transcriptor-srt
+name: audio-video-transcription
 description: >-
   Use this skill to transcribe audio or video into SRT, JSONL, or plain text.
   Activate when the user asks for a transcript, subtitles, or captions. Uses
@@ -37,67 +37,79 @@ transcript from an audio/video file (e.g. `.mp3`, `.wav`, `.m4a`, `.mp4`,
 
 2. **Locate the bundled script.** This repository is a single-skill bundle:
    `SKILL.md` and `scripts/` are at its root. The script is
-   `scripts/transcribe_srt.py`. Resolve its absolute path — it must be executed
+   `scripts/transcribe.py`. Resolve its absolute path — it must be executed
    directly, not reimplemented.
 
-3. **Run the script** with `uv run --with faster-whisper --with numpy` so
-   dependencies are provisioned on demand without touching the project
-   environment:
+3. **Choose the output format.** Apply these rules in order:
+   - Supported formats are only `srt`, `jsonl`, `txt`, and `all`. If the user
+     requests another format (for example, VTT), explain that it is unsupported
+     and offer one of the supported formats; do not pretend to generate it.
+   - If the user explicitly requests a supported format, use it.
+   - For subtitles/captions, use `srt`.
+   - For searching, asking questions, or extracting facts with timestamp
+     references, use `jsonl`.
+   - For plain text without timestamps, use `txt`.
+   - If the user requests every format, use `all`.
+   - If no format is specified, use `srt`.
+
+   `jsonl` is one JSON object per segment with absolute `start`/`end` times in
+   seconds, text, chunk number, and transcript-order ID. For multi-hour recordings,
+   retrieve/process relevant records in batches; do not send the entire transcript
+   to a model at once. `txt` omits timestamps.
+
+4. **Run the script.** Resolve the absolute skill directory, input file, and
+   output directory first. Replace every example path below with the actual
+   absolute path; do not execute it with the example values unchanged. Keep the
+   defaults shown unless the user requests different settings or a resource
+   constraint requires an adjustment.
 
    ```bash
-   uv run --with faster-whisper --with numpy python <path>/scripts/transcribe_srt.py <audio> \
-      [--language es] [--model medium] [--format srt|jsonl|txt|all] \
-      [--output-dir <dir>] \
-      --status-json <status.json>
+   SKILL_DIR="/absolute/path/to/audio-video-transcription"
+   INPUT_FILE="/absolute/path/to/input.mp4"
+   OUTPUT_DIR="/absolute/path/to/transcripts"
+   STATUS_JSON="$OUTPUT_DIR/$(basename "$INPUT_FILE").status.json"
+   FORMAT="srt"
+   LANGUAGE="es"
+   MODEL="medium"
+
+   mkdir -p "$OUTPUT_DIR"
+   uv run --with faster-whisper --with numpy python "$SKILL_DIR/scripts/transcribe.py" \
+     "$INPUT_FILE" --language "$LANGUAGE" --model "$MODEL" --format "$FORMAT" \
+     --output-dir "$OUTPUT_DIR" --status-json "$STATUS_JSON" \
+     --chunk-secs 300 --chunk-overlap 15 --vad --beam-size 5 \
+     --device cpu --compute-type int8
    ```
 
-   - `<audio>` — path to the audio/video file (required)
-   - `--language` — spoken language code. Default `es`. Pass `auto` to auto-detect
-     on the first chunk and lock it for the rest.
-   - `--model` — whisper model size: `tiny`, `base`, `small`, `medium`, `large`
-     (maps to `large-v3`), `turbo`. Default `medium` (~1.5 GB int8). Prefer a
-     smaller model for short/fast jobs, `large`/`turbo` for accuracy.
-   - `--format` — `srt` (default), `jsonl`, `txt`, or `all`. `all` writes all
-     three formats in one pass.
-   - `--output-dir` — directory for the generated transcript file(s). Default
-     is the current working directory.
-   - `--status-json` — path for the live JSON status file. Default is
-     `<output>.status.json`. Always pass an explicit path when the agent needs to
-     poll progress.
-   - `--chunk-secs` — seconds transcribed per chunk (default `300`). Reduce if
-     RAM is tight. `--chunk-overlap` (default `15`) controls cross-chunk context.
-   - `--vad` (default on, use `--no-vad` to disable) — skips silence, much faster
-     on audio with pauses.
-   - `--resume` — reuse completed chunk checkpoints after an interruption.
-     `--force` re-transcribes everything.
-   - `--quiet` — print only the machine markers `[PROGRESS]`/`[DONE]`/`[ERROR]`.
+   Change `FORMAT` only according to step 3. `LANGUAGE` defaults to `es`; use
+   `auto` only when the spoken language is unknown. `MODEL` defaults to `medium`;
+   smaller models favor speed, while `large`/`turbo` favor accuracy. For CUDA,
+   use `--device cuda` only when a compatible NVIDIA GPU is available, and select
+   a supported `--compute-type`; otherwise keep `cpu`/`int8`.
 
-    **Important for large files:** audio is decoded and transcribed in bounded
-    chunks. Output assembly also streams from one checkpoint at a time, rather
-    than retaining the full transcript in memory. Each checkpoint is a JSON file
-    for an individual chunk.
+   **Other options:** keep `--beam-size 5` unless there is a specific tuning
+   request. `--word-timestamps` makes the decoder calculate word timings, but the
+   current exporters still write segment-level SRT/JSONL/TXT. Do not add this flag
+   expecting word-by-word output; if the user requires that granularity, explain
+   that it is not currently supported. The flag is slower and works with or
+   without VAD. The command enables VAD by default; use `--no-vad` only if the
+   user requests disabling it.
+   Reduce `--chunk-secs` if memory is constrained; keep the 15-second overlap
+   unless there is a reason to change it.
 
-    The JSONL export is useful for searching or extracting information from long
-    transcripts: each line contains a segment's absolute `start`/`end` time in
-    seconds, its text, a 1-based chunk number, and a transcript-order `id`.
-    Retrieve or process relevant lines in batches rather than sending a multi-hour
-    transcript to a model all at once. TXT is compact but omits timestamps.
+   **Large files:** audio and final output are processed chunk by chunk, so
+   assembly memory does not grow with recording duration. The first model run may
+   download about 1.5 GB for `medium`; long transcriptions can still take hours.
 
-   **Performance note:** the process works on GPU-less CPU with int8
-   quantization by default (`--device cpu --compute-type int8`) — it is 3–4x
-   faster and uses far less RAM than openai-whisper, but long videos still take
-   significant wall-clock time. Run it and monitor, don't block.
-
-4. **Monitor progress while it runs.** The script writes both machine-readable
+5. **Monitor progress while it runs.** The script writes both machine-readable
    markers to stdout (every ~5 s or on stage/percent change) and an atomic JSON
    status file. See the [Monitoring](#monitoring) section below for how to read
    them and detect stalls.
 
-5. **Report the result.** On success the script prints
+6. **Report the result.** On success the script prints
    `[DONE] output=<path>`. Confirm to the user the file was created, and mention
-   the location, the transcription language/model used, and any interruption that
-   was resumed. If it ends with `[ERROR]`, relay the message; if it was
-   interrupted, run again with `--resume` before giving up.
+   the location, the transcription language/model used, and whether checkpoints
+   were reused. If it ends with `[ERROR]`, relay the message; if interrupted,
+   rerun the same command to continue from checkpoints.
 
 ## Monitoring
 
@@ -137,12 +149,17 @@ While a run is active the agent should not just wait — it should track progres
   after the window clearly exceeds normal chunk times consider interrupting.
 
 - **Interruptions.** A killed process exits with code `130` and writes
-   `state: interrupted`; previously completed chunks are safe on disk under
-   `<basename>.srt.chunks/`. Re-run the same command with `--resume` to continue
-  without re-transcribing finished chunks.
+  `state: interrupted`; completed chunks are checkpointed under
+  `<basename>.srt.chunks/`. Rerun the same command to continue.
+
+- **Checkpoint rule:** the script automatically loads existing checkpoints
+  unless `--force` is passed; `--resume` is accepted but currently does not change
+  that behavior. Reuse checkpoints only for the exact same input and transcription
+  settings. If the input or settings changed, add `--force` to transcribe every
+  chunk again.
 
 - **Resume file semantics.** Checkpoint files (`chunk_%05d.json`) are tiny; they
-  may be deleted to free disk, but then resume re-transcribes those chunks.
+  may be deleted to free disk, but then those chunks must be transcribed again.
 
 ## Output
 

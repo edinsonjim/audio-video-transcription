@@ -1,4 +1,4 @@
-name: transcriptor-srt
+name: audio-video-transcription
 version: 1.1.0
 description: Transcribe audio/video to SRT, JSONL, or plain text with faster-whisper.
 author: edinsonjim
