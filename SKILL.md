@@ -1,11 +1,10 @@
 ---
 name: transcriptor-srt
 description: >-
-  Transcribes audio or video files into SRT, JSONL, or plain-text transcripts
-  using faster-whisper. Use whenever the user asks to transcribe, generate
-  subtitles or captions, or create a transcript. Designed for very large files
-  (multi-GB): processes audio in chunks, supports resume after interruption, and
-  reports live progress via a JSON status file and [PROGRESS] stdout markers.
+  Use this skill to transcribe audio or video into SRT, JSONL, or plain text.
+  Activate when the user asks for a transcript, subtitles, or captions. Uses
+  faster-whisper and supports very large files (multi-GB) with chunking, resume,
+  and live progress through a JSON status file and [PROGRESS] stdout markers.
   Trigger keywords: transcribe, transcript, transcription, srt, jsonl, subtitles,
   captions, audio to text, subtitular, transcripción, subtítulos, whisper.
 ---
@@ -36,9 +35,10 @@ transcript from an audio/video file (e.g. `.mp3`, `.wav`, `.m4a`, `.mp4`,
    path. Confirm the file exists (and that `ffmpeg`/`ffprobe` are installed)
    before running.
 
-2. **Locate the bundled script.** It lives in the `scripts/` folder of this
-   skill (`scripts/transcribe_srt.py`). Resolve its absolute path — it must be
-   executed directly, not reimplemented.
+2. **Locate the bundled script.** This repository is a single-skill bundle:
+   `SKILL.md` and `scripts/` are at its root. The script is
+   `scripts/transcribe_srt.py`. Resolve its absolute path — it must be executed
+   directly, not reimplemented.
 
 3. **Run the script** with `uv run --with faster-whisper --with numpy` so
    dependencies are provisioned on demand without touching the project

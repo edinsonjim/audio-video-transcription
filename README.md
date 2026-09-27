@@ -1,21 +1,19 @@
 # transcriptor-srt
 
-APM package (library) with a reusable skill for transcribing audio and video
-using faster-whisper. It exports SRT subtitles by default, with optional JSONL
-and plain-text formats. Designed for very large files (4–7 GB+): it transcribes
-in chunks, supports resume after interruption, streams transcript assembly, and
-reports live progress to the agent via a JSON status file and `[PROGRESS]` stdout
-markers.
+A single-skill APM bundle for transcribing audio and video with faster-whisper.
+It exports SRT subtitles by default, with optional JSONL and plain-text formats.
+Designed for very large files (4–7 GB+): it transcribes in chunks, supports
+resume after interruption, streams transcript assembly, and reports live
+progress to the agent via a JSON status file and `[PROGRESS]` stdout markers.
 
 ## Contents
 
 ```
-.apm/
-└── skills/
-    └── transcriptor-srt/
-        ├── SKILL.md                    # trigger + workflow
-        └── scripts/
-            └── transcribe_srt.py       # CLI wrapper around faster-whisper
+├── SKILL.md                    # skill instructions and activation metadata
+├── scripts/
+│   └── transcribe_srt.py       # CLI wrapper around faster-whisper
+├── apm.yml                     # APM metadata and target configuration
+└── README.md
 ```
 
 ## Usage
@@ -46,7 +44,7 @@ must be installed on `PATH`.
 ## Script
 
 ```
-python transcribe_srt.py AUDIO [--language es] [--model medium] [--format srt]
+python scripts/transcribe_srt.py AUDIO [--language es] [--model medium] [--format srt]
                       [--output-dir .]
                       [--chunk-secs 300] [--chunk-overlap 15] [--vad]
                       [--beam-size 5] [--word-timestamps]
@@ -76,9 +74,9 @@ stdout: `[PROGRESS]`, `[DONE] output=<...>`, `[ERROR] msg=<...>`.
 
 ## Development
 
-Only the source under `.apm/` is versioned. Generated runtime dirs
-(`.agents/`, `.claude/`, `.cursor/`, `.opencode/`, `.github/agents/`) are
-gitignored and created on demand:
+The root `SKILL.md` and `scripts/` directory are the single-skill source bundle.
+Generated runtime dirs (`.agents/`, `.claude/`, `.cursor/`, `.opencode/`,
+`.github/agents/`) are gitignored and created on demand:
 
     apm install --target copilot,claude,cursor,opencode
 
