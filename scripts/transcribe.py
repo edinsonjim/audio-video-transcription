@@ -75,7 +75,7 @@ def parse_args():
     parser.add_argument(
         "--word-timestamps",
         action="store_true",
-        help="Enable word-level timestamps (slower; implies VAD). Default: off",
+        help="Calculate word timings during decoding (slower; exporters remain segment-level). Default: off",
     )
     parser.add_argument(
         "--device",
@@ -95,7 +95,7 @@ def parse_args():
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Reuse completed chunk checkpoints so an interrupted run continues",
+        help="Mark this as a resume run (existing checkpoints are reused by default)",
     )
     parser.add_argument(
         "--force",
